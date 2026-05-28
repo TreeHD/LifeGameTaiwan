@@ -4,7 +4,15 @@ import { useSettingsStore } from '../stores/settings.js'
 
 const game = useGameStore()
 const settings = useSettingsStore()
-const start = () => game.startNewGame()
+const emit = defineEmits(['open-settings'])
+
+const start = () => {
+  if (!settings.isConfigured) {
+    emit('open-settings', { guide: true })
+    return
+  }
+  game.startNewGame()
+}
 </script>
 
 <template>
@@ -19,8 +27,7 @@ const start = () => game.startNewGame()
     </p>
 
     <div class="actions">
-      <button v-if="settings.isConfigured" @click="start">START</button>
-      <button v-else @click="$emit('open-settings')">先設定 API KEY</button>
+      <button @click="start">&gt; START</button>
     </div>
 
     <p class="footer dim">

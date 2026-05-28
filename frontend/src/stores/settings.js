@@ -8,7 +8,7 @@ export const useSettingsStore = defineStore('settings', {
   state: () => ({
     provider: 'gemini',                // 'gemini' | 'claude'
     apiKey: '',
-    geminiModel: 'gemini-2.0-flash',
+    geminiModel: 'gemini-3.1-flash-lite',
     claudeModel: 'claude-haiku-4-5',
     statsBaseUrl: '/api',              // '' to skip backend and use static fallback
     kioskMode: false                   // hide settings link, fullscreen-friendly

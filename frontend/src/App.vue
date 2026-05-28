@@ -14,25 +14,36 @@ const game = useGameStore()
 const settings = useSettingsStore()
 
 const showSettings = ref(false)
+const guideMode = ref(false)
 
 const screen = computed(() => {
   if (showSettings.value) return 'settings'
   return game.screen
 })
 
-const closeSettings = () => { showSettings.value = false }
-const openSettings  = () => { showSettings.value = true }
+const closeSettings = () => {
+  showSettings.value = false
+  guideMode.value = false
+}
+const openSettings = (opts) => {
+  showSettings.value = true
+  guideMode.value = !!(opts && opts.guide)
+}
 </script>
 
 <template>
   <div v-if="game.generatingMessage" class="generating-badge">{{ game.generatingMessage }}</div>
 
   <nav v-if="!settings.kioskMode || screen === 'idle'" class="top-nav">
-    <a v-if="screen !== 'settings'" href="#" @click.prevent="openSettings">[ settings ]</a>
+    <a v-if="screen !== 'settings'" href="#" @click.prevent="openSettings()">[ settings ]</a>
     <a v-else href="#" @click.prevent="closeSettings">[ back ]</a>
   </nav>
 
-  <SettingsScreen v-if="screen === 'settings'" @close="closeSettings" />
+  <SettingsScreen
+    v-if="screen === 'settings'"
+    :guide="guideMode"
+    @close="closeSettings"
+  />
   <IdleScreen v-else-if="screen === 'idle'" @open-settings="openSettings" />
   <LoadingScreen v-else-if="screen === 'loading'" />
   <CharacterScreen v-else-if="screen === 'character'" />
