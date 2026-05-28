@@ -1,0 +1,21 @@
+# deps
+node_modules/
+**/node_modules/
+
+# build
+frontend/dist/
+backend/.wrangler/
+backend/dist/
+.wrangler/
+
+# editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# logs
+npm-debug.log*
+*.log
+
+# raw data — we keep the parsed stats.js in the repo, not the source files
+backend/data/raw/

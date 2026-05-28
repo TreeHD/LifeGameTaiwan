@@ -1,0 +1,16 @@
+{
+  "name": "taiwan-life-game-stats-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "fetch": "node scripts/fetch.js",
+    "build:data": "node scripts/build.js",
+    "refresh": "node scripts/fetch.js && node scripts/build.js",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}
