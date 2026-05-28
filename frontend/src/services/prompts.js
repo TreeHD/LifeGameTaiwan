@@ -280,6 +280,128 @@ function pickCurveballHint() {
   return CURVEBALL_POOL[Math.floor(Math.random() * CURVEBALL_POOL.length)]
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Early death. Without this, a character with stage-4 cancer keeps rolling
+// new "do you push through chemo" decisions all the way to 70. People who are
+// already very sick sometimes don't make it to retirement, and the game
+// should reflect that.
+//
+// Severity is read from the `health` field of the latest state_after.
+// Probability scales with both severity and age — a 28yo with leukaemia has
+// real danger but most survive; a 62yo with the same diagnosis breaks easier.
+//
+// Triggering doesn't mean death-that-instant — it means "this is the final
+// node of this life". The LLM is told to write a node that frames the end,
+// then is_terminal: true forces the ending pipeline to run next turn.
+const HEALTH_SEVERITY = [
+  // critical — terminal-flavoured language, late-stage, recurrence
+  { tier: 'critical', re: /末期|晚期|安寧|預後不佳|不樂觀|已經.*(轉移|擴散)|復發|惡化|多重器官|插管|加護|心衰|肝衰|腎衰.*末|失智.*(末|晚)/ },
+  // serious — major active illness or recent major surgery
+  { tier: 'serious',  re: /癌症|腫瘤|化療|放療|手術後|心臟病|心肌梗塞|中風|肝硬化|洗腎|腎衰|罕病|重大傷病|重症|猝死|憂鬱症.*(住院|嚴重)/ },
+  // chronic — long-running issues that compound with age
+  { tier: 'chronic',  re: /糖尿病|高血壓|高血脂|心血管|慢性|肝病|腎臟病|肺.*(慢性|阻塞)|失智初期|帕金森/ }
+]
+
+function classifyHealth(healthLine) {
+  if (!healthLine) return null
+  for (const s of HEALTH_SEVERITY) {
+    if (s.re.test(healthLine)) return s.tier
+  }
+  return null
+}
+
+function earlyDeathProbability(tier, age) {
+  // Base rates per node, then scale by age. Tuned so:
+  //   - 28yo / serious  → ~3%   (most survive)
+  //   - 45yo / serious  → ~12%
+  //   - 62yo / serious  → ~28%
+  //   - 38yo / critical → ~22%
+  //   - 60yo / critical → ~55%
+  //   - 55yo / chronic  → ~5%
+  //   - 68yo / chronic  → ~14%
+  if (!tier) return 0
+  const base = { critical: 0.18, serious: 0.04, chronic: 0.01 }[tier]
+  // Age multiplier: 1.0 at 25, ~3.2 at 65. Quadratic-ish so old age really hits.
+  const ageMul = Math.max(0.4, Math.pow((age - 10) / 30, 1.6))
+  return Math.min(0.7, base * ageMul)
+}
+
+function rollEarlyDeath(lastState, lastAge) {
+  const healthLine = lastState?.health
+  const tier = classifyHealth(healthLine)
+  if (!tier) return null
+  const p = earlyDeathProbability(tier, lastAge)
+  if (Math.random() >= p) return null
+  return { tier, healthLine, p, age: lastAge }
+}
+// ───────────────────────────────────────────────────────────────────────────
+
+// ───────────────────────────────────────────────────────────────────────────
+// Theme repetition guard.
+//
+// Without this, the LLM doubles down on whichever dramatic axis it finds
+// emotionally rich. Players reported lives that spend 4+ nodes in a row
+// circling the same beat ("you can't go home again", "the affair", "the dying
+// parent"). The model isn't wrong to find that material compelling — but a
+// life is not a single grief loop, and replaying the same theme drains it.
+//
+// We tag each past node by keyword-matching the `situation` and `choice` text
+// against a small bank of theme regexes. If a theme has shown up in 2+ of the
+// last 3 nodes, it's added to the "forbid as the focus this turn" list. The
+// theme can still exist as background colour (you can still be living abroad,
+// your parent can still be ill) — it just can't be the dramatic engine of the
+// new node.
+//
+// Keywords are intentionally broad. False positives are cheaper than false
+// negatives: nudging the LLM away from a theme it wasn't going to repeat is
+// fine; failing to nudge when it WAS going to repeat is the bug we're fixing.
+const THEME_KEYWORDS = [
+  { tag: '海外/逃避過往', keywords: /國外|海外|出國|移民|不回台|留在.*國|異鄉|外派|定居.*國|搬到.*(美|日|歐|澳|加|新|英|德|法|韓)/ },
+  { tag: '回鄉/返鄉', keywords: /回鄉|返鄉|回家鄉|回到.*(老家|鄉下|故鄉)|搬回/ },
+  { tag: '父母重病/長照', keywords: /父母.*(病|住院|中風|失智|長照|過世|走了)|爸爸.*(病|過世|走)|媽媽.*(病|過世|走)|長照|失智|阿公|阿嬤.*(病|住院|過世)/ },
+  { tag: '配偶外遇/婚變', keywords: /外遇|劈腿|第三者|婚外|偷吃|另一半.*(別人|有人)|配偶.*(背叛|劈腿)|離婚/ },
+  { tag: '失業/裁員', keywords: /失業|被裁|資遣|公司.*(倒|關|裁)|沒工作|找不到工作|無業|被開除|被炒/ },
+  { tag: '創業困境', keywords: /創業.*(失敗|周轉|燒錢|倒|撐不下去)|店.*(撐不下|倒|關)|公司.*(撐不下|周轉)/ },
+  { tag: '前任/初戀重逢', keywords: /前任|初戀|舊情人|前女友|前男友|前妻|前夫|多年沒見.*(她|他)|當年.*(那個人|錯過)/ },
+  { tag: '健康危機', keywords: /癌症|腫瘤|化療|手術|心臟病|中風|住院|診斷出|身體出狀況|健檢.*紅字/ },
+  { tag: '子女問題', keywords: /小孩.*(霸凌|出狀況|休學|自殘|離家|不聯絡|生病)|孩子.*(霸凌|出狀況|休學|自殘|生病)|子女.*(離家|不聯絡|出狀況)/ },
+  { tag: '詐騙/被騙', keywords: /被騙|詐騙|詐欺|被害|血本無歸|錢.*(被騙|不見)/ },
+  { tag: '投資爆雷', keywords: /股票.*(套牢|崩|虧)|虛擬|加密|幣.*崩|投資.*(失敗|虧|崩|爆雷)|套牢/ },
+  { tag: '家族決裂', keywords: /家族.*(決裂|翻臉|不和|斷絕)|手足.*(吵|決裂|翻臉|不聯絡)|跟家裡.*(不|斷|斷絕)/ },
+  { tag: '舊作品/事蹟被重新發現', keywords: /當年.*(作品|文章|影片).*發現|過去.*作品.*被(重新)?(發現|提起|報導)/ },
+  { tag: '迷上一件事/沉迷', keywords: /迷上|沉迷|著迷|上癮|無法自拔|戒不掉/ },
+  { tag: '喪偶/喪親', keywords: /喪偶|配偶.*(過世|走了|離開)|另一半.*(過世|走了)|另一半離世/ },
+  { tag: '出櫃/性向', keywords: /出櫃|同性|性向|跨性別|變性/ },
+  { tag: '考試/升學壓力', keywords: /學測|統測|會考|指考|升學.*(壓力)|榜單|落榜/ },
+  { tag: '北漂/搬家壓力', keywords: /北漂|搬到台北|搬上來|租屋.*(壓力|漲)|房租/ }
+]
+
+function tagNode(situation, choice) {
+  const text = (situation || '') + ' ' + (choice || '')
+  const tags = []
+  for (const t of THEME_KEYWORDS) {
+    if (t.keywords.test(text)) tags.push(t.tag)
+  }
+  return tags
+}
+
+// Walk the last `windowSize` nodes; return any theme that has hit `threshold`+
+// times in that window. Default: 2+ hits in last 3 nodes.
+function detectOverusedThemes(history, windowSize = 3, threshold = 2) {
+  if (!history || history.length === 0) return []
+  const recent = history.slice(-windowSize)
+  const counts = new Map()
+  for (const h of recent) {
+    const tags = tagNode(h.situation, h.choice)
+    for (const t of tags) counts.set(t, (counts.get(t) || 0) + 1)
+  }
+  return [...counts.entries()]
+    .filter(([, n]) => n >= threshold)
+    .map(([tag]) => tag)
+}
+// ───────────────────────────────────────────────────────────────────────────
+
+
 // Decide which cast members to surface to the LLM this turn.
 //
 // Goal: stop "every old name keeps appearing forever". A person's chance of
@@ -812,9 +934,29 @@ ${lastState.notable ? `- 備註：${lastState.notable}` : ''}\n`
     ? `\n【🎲 跳出框架（這個節點請打破之前的節奏）】\n${curveball}\n\n這個提示是要讓人生**不要太連貫**——前幾個節點如果都是工作/感情線，這個節點就讓它岔開到完全不同的軸；如果前幾個節點都很沉重，這個節點可以是一個怪異但真實的小插曲。\n\n但有兩個底線必須守住：\n（1）**起點要從「目前狀態」自然走出去**——人物還是在原本的地點、年齡、處境，不可以無預警把人空降到別的人生。\n（2）**這個事件結束後，角色不會憑空變成另一個人**——選項的兩個方向應該是「讓這件事改變我多少」而不是「忽略這件事」 vs 「重新投胎」。\n`
     : ''
 
+  // Early-death roll. Without this, a character with stage-4 cancer keeps
+  // rolling new "do you push through chemo" decisions all the way to 70 — life
+  // is harsher than that. Severity is read from `lastState.health`; younger
+  // people resist more (a 28yo with leukaemia is in real danger but most
+  // survive); older people break easier.
+  const earlyDeath = rollEarlyDeath(lastState, lastAge)
+  const earlyDeathBlock = earlyDeath
+    ? `\n【💀 此節點是這段人生的最後一節（健康狀況已撐不下去）】\n目前的健康狀態：「${earlyDeath.healthLine}」\n年齡 ${lastAge} 歲。系統判定這個節點是這個人物的人生終點。\n\n請以這個前提設計這個節點：\n  - situation 應該描寫一個「狀況急轉直下」的場景（病情惡化、住進加護病房、手術風險、最後一次離院、家人圍床、一個和某個重要的人最後的對話）。\n  - 兩個選項仍然要存在，但這次不是「未來的兩條路」——而是「面對這最後一段時間的兩種態度」（例如：把所有人召集回來 vs 一個人安靜地走；繼續積極治療 vs 放下身體享受剩下的時光；告訴家人真相 vs 替他們留下另一個版本的故事）。\n  - **必須設定 is_terminal: true**。這是不可違反的——下一步會直接進入結局散文。\n  - state_projections 兩條路都填，但 health 欄位請反映「最後階段」的真實（例如：「住進安寧病房」「留在家中由家人照顧」「術後併發症仍在加護病房」）。\n`
+    : ''
+
+
+  // Theme repetition guard — see THEME_KEYWORDS / detectOverusedThemes above.
+  // If the same dramatic axis has driven 2+ of the last 3 nodes, tell the LLM
+  // to retire it as the focus this turn. The theme can stay as background
+  // (still living abroad, parent still ill) but cannot be the engine.
+  const overused = detectOverusedThemes(history)
+  const overusedBlock = overused.length > 0
+    ? `\n【🚫 已經連續講太多次的主題（請這次換一個新方向）】\n最近三個節點裡，下列主題反覆出現：${overused.map(t => `「${t}」`).join('、')}。\n這個節點請**換一個全新的戲劇引擎**——別再讓這些主題當作 situation 的核心衝突。它們可以作為背景或一句話帶過（角色當前狀態本來就會延續），但這次的兩難要圍繞**完全不同的領域**：\n  - 如果連續困在感情線，換到工作 / 健康 / 朋友 / 子女 / 經濟。\n  - 如果連續困在父母長照，換到自己的事業選擇 / 一段感情 / 一個朋友 / 一個怪奇插曲。\n  - 如果連續困在「逃避過往 vs 回去面對」，停下來——讓角色經歷一段跟過往完全無關的時光（一個新工作、一個新關係、一個新城市的新朋友、一場意外、一個興趣）。\n人生不是同一個傷口被反覆撕開——人會被新的事情拉走注意力，這正是時間在做的事。\n`
+    : ''
+
   const system = `你是台灣版人生模擬的關卡設計師。
 根據角色背景、選擇歷史、台灣當前統計、人生原型、以及此時的時代背景，生成下一個人生決策節點。
-${archeBlock}${dramaBlock}${oppBlock}${macroBlock}${curveballBlock}${meetNewBlock}
+${archeBlock}${dramaBlock}${oppBlock}${macroBlock}${curveballBlock}${earlyDeathBlock}${overusedBlock}${meetNewBlock}
 【台灣現況統計（★ 標記角色所在地）】
 ${statsBlock(stats, character)}
 

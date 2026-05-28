@@ -11,7 +11,9 @@ const settings = useSettingsStore()
 const game = useGameStore()
 const emit = defineEmits(['close'])
 
-const localKey = ref(settings.apiKey)
+// Per-provider key field — re-bound when provider changes so each provider
+// has its own slot. Switching does NOT wipe the others.
+const localKey = ref(settings.currentApiKey)
 const showKey  = ref(false)
 const keyInput = ref(null)
 const guideStep = ref(0)   // 0 = banner, 1 = tutorial open, 2 = filled
@@ -20,10 +22,21 @@ const justSaved = ref(false)
 
 const aiStudioUrl = 'https://aistudio.google.com/app/apikey'
 
-const placeholder = computed(() =>
-  settings.provider === 'gemini' ? 'AIza...' : 'sk-ant-...'
-)
+const placeholder = computed(() => {
+  if (settings.provider === 'gemini') return 'AIza...'
+  if (settings.provider === 'claude') return 'sk-ant-...'
+  if (settings.provider === 'openai') return 'sk-... 或自訂端點的 token'
+  return ''
+})
 const tutorialFor = computed(() => settings.provider)
+
+// Reload localKey from the matching provider slot whenever provider changes —
+// without this, switching to Claude would still show the Gemini key in the
+// input box (and would overwrite Claude's slot on save).
+watch(() => settings.provider, () => {
+  localKey.value = settings.currentApiKey
+  guideStep.value = localKey.value.trim().length > 8 ? 2 : (props.guide ? 1 : 0)
+})
 
 watch(localKey, (v) => {
   if (props.guide && v.trim().length > 8) guideStep.value = 2
@@ -32,12 +45,14 @@ watch(localKey, (v) => {
 onMounted(() => {
   if (props.guide) {
     keyInput.value?.focus()
-    guideStep.value = 1
+    guideStep.value = localKey.value.trim().length > 8 ? 2 : 1
   }
 })
 
 const save = () => {
-  settings.apiKey = localKey.value.trim()
+  if (settings.provider !== 'selfhost') {
+    settings.setCurrentApiKey(localKey.value)
+  }
   if (props.guide && settings.isConfigured) {
     justSaved.value = true
     setTimeout(() => {
@@ -64,9 +79,10 @@ const clearSave = () => {
 }
 
 const openProviderConsole = () => {
-  const url = settings.provider === 'gemini'
-    ? aiStudioUrl
-    : 'https://console.anthropic.com/settings/keys'
+  const url =
+    settings.provider === 'gemini' ? aiStudioUrl
+    : settings.provider === 'claude' ? 'https://console.anthropic.com/settings/keys'
+    : 'https://platform.openai.com/api-keys'
   window.open(url, '_blank', 'noopener')
 }
 </script>
@@ -88,16 +104,22 @@ const openProviderConsole = () => {
 
     <h2 v-if="!guide" class="title">設定 / Settings</h2>
 
-    <section class="config" :class="{ highlight: guide && guideStep < 2 }">
+    <section class="config" :class="{ highlight: guide && guideStep < 2 && settings.provider !== 'selfhost' }">
       <label class="row">
         <span class="label">LLM Provider</span>
         <select v-model="settings.provider">
-          <option value="gemini">Google Gemini（推薦・免費）</option>
-          <option value="claude">Anthropic Claude（付費）</option>
+          <option value="selfhost">本站內建（免設定，直接玩）</option>
+          <option value="gemini">Google Gemini（自帶 key・免費）</option>
+          <option value="claude">Anthropic Claude（自帶 key・付費）</option>
+          <option value="openai">OpenAI 相容（自訂端點）</option>
         </select>
       </label>
 
-      <label class="row api-row">
+      <p v-if="settings.provider === 'selfhost'" class="hint dim selfhost-note">
+        ✓ 不需要 API Key，伺服器端代為呼叫上游 LLM。
+      </p>
+
+      <label v-if="settings.provider !== 'selfhost'" class="row api-row">
         <span class="label">API Key</span>
         <div class="key-input">
           <input
@@ -119,11 +141,25 @@ const openProviderConsole = () => {
         </div>
       </label>
 
-      <label class="row">
+      <label v-if="settings.provider !== 'selfhost'" class="row">
         <span class="label">Model</span>
         <input v-if="settings.provider === 'gemini'" v-model="settings.geminiModel" />
-        <input v-else v-model="settings.claudeModel" />
+        <input v-else-if="settings.provider === 'claude'" v-model="settings.claudeModel" />
+        <input v-else v-model="settings.openaiModel" placeholder="gpt-4o-mini / llama-3.1-70b / ..." />
       </label>
+
+      <label v-if="settings.provider === 'openai'" class="row">
+        <span class="label">API 端點</span>
+        <input
+          v-model="settings.openaiBaseUrl"
+          placeholder="https://api.openai.com/v1"
+          spellcheck="false"
+          autocomplete="off"
+        />
+      </label>
+      <p v-if="settings.provider === 'openai'" class="hint dim">
+        任何 OpenAI 相容端點都行：OpenAI / Groq / OpenRouter / DeepSeek / Together / 本機 Ollama 或 LM Studio。
+      </p>
 
       <details v-if="!guide" class="advanced">
         <summary>進階</summary>
@@ -184,7 +220,7 @@ const openProviderConsole = () => {
       </ol>
     </section>
 
-    <section v-else class="tutorial tutorial-open">
+    <section v-else-if="tutorialFor === 'claude'" class="tutorial tutorial-open">
       <div class="tutorial-head static">
         <span class="tag">教學</span>
         <span>Anthropic Claude API KEY</span>
@@ -215,6 +251,52 @@ const openProviderConsole = () => {
       </ol>
     </section>
 
+    <section v-else-if="tutorialFor === 'openai'" class="tutorial tutorial-open">
+      <div class="tutorial-head static">
+        <span class="tag">教學</span>
+        <span>OpenAI 相容端點 ── 任何相容 /v1/chat/completions 的服務</span>
+      </div>
+      <ol class="steps">
+        <li>
+          <span class="step-num">1</span>
+          <div class="step-body">
+            <p>選你要用的服務，把它的端點貼到 <strong>API 端點</strong> 欄位：</p>
+            <p class="dim">
+              ・OpenAI ── <code>https://api.openai.com/v1</code><br>
+              ・Groq ── <code>https://api.groq.com/openai/v1</code>（速度極快，有免費額度）<br>
+              ・OpenRouter ── <code>https://openrouter.ai/api/v1</code><br>
+              ・DeepSeek ── <code>https://api.deepseek.com/v1</code><br>
+              ・本機 Ollama ── <code>http://localhost:11434/v1</code><br>
+              ・本機 LM Studio ── <code>http://localhost:1234/v1</code>
+            </p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <div class="step-body">
+            <p>到該服務後台拿 API Key，貼到上面 <strong>API Key</strong> 欄位。</p>
+            <button class="open-link" @click="openProviderConsole">
+              &gt; 開啟 OpenAI 後台 ↗
+            </button>
+            <p class="dim">本機 Ollama / LM Studio 通常隨便填一個 token 就行（甚至空字串）。</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <div class="step-body">
+            <p>把 <strong>Model</strong> 改成該服務的模型名（例如 <code>gpt-4o-mini</code>、<code>llama-3.3-70b-versatile</code>、<code>deepseek-chat</code>、<code>qwen2.5:14b</code>）。</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">4</span>
+          <div class="step-body">
+            <p>按 SAVE 開始遊戲。</p>
+            <p class="dim">⚠ 本機端點需要 CORS 開放（Ollama 預設不開）。瀏覽器叫不到的話，要設定 <code>OLLAMA_ORIGINS=*</code> 之類的環境變數。</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
     <hr v-if="!guide" class="divider" />
 
     <section v-if="!guide">
@@ -237,7 +319,7 @@ const openProviderConsole = () => {
     </section>
 
     <div class="actions" :class="{ pulsing: guide && guideStep === 2 && !justSaved }">
-      <button @click="save" class="save" :disabled="guide && !localKey.trim()">
+      <button @click="save" class="save" :disabled="guide && settings.provider !== 'selfhost' && !localKey.trim()">
         {{ justSaved ? '✓ 開始' : (guide ? '> SAVE & START' : 'SAVE') }}
       </button>
       <button v-if="!guide" @click="emit('close')">CANCEL</button>

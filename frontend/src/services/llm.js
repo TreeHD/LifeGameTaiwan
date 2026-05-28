@@ -1,9 +1,14 @@
-// Browser-side LLM client. Two providers, single interface.
+// Browser-side LLM client. Four providers, single interface.
 //
 // Gemini: plain fetch — the v1beta REST API is permissive enough that pulling
 // in @google/generative-ai for one call would just bloat the bundle.
 // Claude: official SDK with `dangerouslyAllowBrowser` because Anthropic guards
 // against accidental key leakage. Acceptable here — see README caveat.
+// OpenAI-compat: any /v1/chat/completions endpoint (OpenAI, Groq, OpenRouter,
+// DeepSeek, Together, Ollama, LM Studio, …). Endpoint is user-configurable.
+// Selfhost: hits this site's own /api/llm/chat — the Worker proxies to a
+// shared upstream (e.g. NVIDIA NIM) using server-side keys with round-robin
+// rotation. The user doesn't bring a key.
 //
 // Both go through `generateJSON` which strips ``` fences and retries once with
 // a stricter instruction. LLMs occasionally wrap output in markdown despite
@@ -65,6 +70,83 @@ class ClaudeClient {
   }
 }
 
+// OpenAI-compatible chat completions. Works with any provider that implements
+// /v1/chat/completions: OpenAI, Groq, OpenRouter, DeepSeek, Together, Ollama,
+// LM Studio, etc. Both base URL and model are user-configurable.
+class OpenAIClient {
+  constructor({ apiKey, model, baseUrl }) {
+    this.apiKey = apiKey
+    this.model = model || 'gpt-4o-mini'
+    // Tolerate trailing slash; we always append /chat/completions.
+    this.baseUrl = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')
+  }
+
+  async generateText(system, user, { maxTokens = 1024 } = {}) {
+    const url = `${this.baseUrl}/chat/completions`
+    const body = {
+      model: this.model,
+      max_tokens: maxTokens,
+      temperature: 0.9,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ]
+    }
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify(body)
+    })
+    if (!r.ok) {
+      const errText = await r.text().catch(() => '')
+      throw new Error(`OpenAI-compat API ${r.status}: ${errText.slice(0, 200)}`)
+    }
+    const data = await r.json()
+    const text = data?.choices?.[0]?.message?.content
+    if (!text) throw new Error('OpenAI-compat 回傳空內容')
+    return text
+  }
+}
+
+// Selfhost — proxied through this site's own Worker at /api/llm/chat.
+// The Worker holds the upstream keys (e.g. NVIDIA NIM) and round-robins
+// across them, so the user doesn't need to bring their own key.
+class SelfhostClient {
+  constructor({ baseUrl } = {}) {
+    // Default to same-origin /api so the static deploy "just works" with the
+    // bundled Worker. Override via settings.selfhostBaseUrl if needed.
+    this.baseUrl = (baseUrl || '/api').replace(/\/+$/, '')
+  }
+
+  async generateText(system, user, { maxTokens = 1024 } = {}) {
+    const url = `${this.baseUrl}/llm/chat`
+    const body = {
+      max_tokens: maxTokens,
+      temperature: 0.9,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ]
+    }
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    if (!r.ok) {
+      const errText = await r.text().catch(() => '')
+      throw new Error(`Self-host LLM ${r.status}: ${errText.slice(0, 200)}`)
+    }
+    const data = await r.json()
+    const text = data?.choices?.[0]?.message?.content
+    if (!text) throw new Error('Self-host LLM 回傳空內容')
+    return text
+  }
+}
+
 class LLM {
   constructor(impl) { this.impl = impl }
 
@@ -92,9 +174,14 @@ class LLM {
 }
 
 export function createLLM(settings) {
-  const { provider, apiKey, geminiModel, claudeModel } = settings
+  const { provider, geminiModel, claudeModel, openaiModel, openaiBaseUrl, selfhostBaseUrl } = settings
+  if (provider === 'selfhost') {
+    return new LLM(new SelfhostClient({ baseUrl: selfhostBaseUrl }))
+  }
+  const apiKey = settings.currentApiKey
   if (!apiKey) throw new Error('未設定 API Key')
   if (provider === 'gemini') return new LLM(new GeminiClient({ apiKey, model: geminiModel }))
   if (provider === 'claude') return new LLM(new ClaudeClient({ apiKey, model: claudeModel }))
+  if (provider === 'openai') return new LLM(new OpenAIClient({ apiKey, model: openaiModel, baseUrl: openaiBaseUrl }))
   throw new Error(`未知的 provider: ${provider}`)
 }
