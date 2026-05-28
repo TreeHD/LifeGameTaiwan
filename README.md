@@ -1,4 +1,4 @@
-# 台灣人生模擬 Taiwan Life Game
+# 台灣人生模擬 Taiwan Life Game 
 
 > 參考木原共《あなたをプレイするのはなに？》（森美術館 六本木クロッシング 2025）
 > Vue 3 + LLM 前端直連 + Cloudflare Pages 一鍵部署
