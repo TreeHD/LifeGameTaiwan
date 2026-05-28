@@ -1,3 +1,14 @@
 name = "lifegame-taiwan"
+main = "worker/index.js"
 compatibility_date = "2025-01-01"
-pages_build_output_dir = "frontend/dist"
+
+# Workers + Static Assets — replaces the old `pages_build_output_dir` setup.
+# `frontend/dist` is the built Vite output; the Worker handles /api/* and
+# delegates everything else to the ASSETS binding.
+[assets]
+directory = "./frontend/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[observability]
+enabled = true

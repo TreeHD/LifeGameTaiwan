@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { useGameStore } from '../stores/game.js'
 
 const game = useGameStore()
-const dream = ref('')
+const dream = ref(game.pendingDream || '')
 const submitting = ref(false)
 
 const submit = async () => {
@@ -28,8 +28,8 @@ const placeholder = computed(() => {
 
 <template>
   <main class="screen dream">
-    <p class="line">{{ game.character?.name }}心裡有一個夢想。</p>
-    <p class="line">你來替他說出來。</p>
+    <p class="line">即將出生一個台灣人。</p>
+    <p class="line">請先替他/她，說出一個還沒實現的願望。</p>
 
     <form @submit.prevent="submit" class="form">
       <span class="prompt">&gt;</span>
@@ -42,7 +42,7 @@ const placeholder = computed(() => {
       />
     </form>
 
-    <div class="hint dim">按 Enter 繼續</div>
+    <div class="hint dim">按 Enter 開始這段人生</div>
   </main>
 </template>
 

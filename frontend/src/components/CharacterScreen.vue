@@ -1,7 +1,7 @@
 <script setup>
 import { useGameStore } from '../stores/game.js'
 const game = useGameStore()
-const next = () => game.advanceToDream()
+const next = () => game.advanceToFirstNode()
 </script>
 
 <template>

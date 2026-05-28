@@ -1,11 +1,23 @@
 <script setup>
+import { ref } from 'vue'
 import { useGameStore } from '../stores/game.js'
 import BranchTree from './BranchTree.vue'
 
 const game = useGameStore()
+const reliving = ref(false)
 
-const onRelive = () => game.relive()
-const onQuit   = () => game.quit()
+const onPickAlternative = async (index) => {
+  if (reliving.value) return
+  if (!game.canRelive) {
+    game.error = 'RELIVE 次數已用完。'
+    return
+  }
+  reliving.value = true
+  try { await game.reliveFrom(index) }
+  finally { reliving.value = false }
+}
+
+const onQuit = () => game.quit()
 </script>
 
 <template>
@@ -17,21 +29,36 @@ const onQuit   = () => game.quit()
     </section>
 
     <section class="tree-wrap">
-      <div class="screen-title">人生分支樹</div>
-      <BranchTree :history="game.history" :show-alternatives="true" />
+      <div class="tree-head">
+        <span class="screen-title">人生分支樹</span>
+        <span v-if="game.canRelive" class="tree-hint">
+          點任一虛線分支 → 從那一刻改走另一條路
+          ・剩 {{ game.reliveRemaining }} 次
+        </span>
+        <span v-else class="tree-hint dim">RELIVE 次數已用完</span>
+      </div>
+      <BranchTree
+        :history="game.history"
+        :show-alternatives="true"
+        :on-pick-alternative="game.canRelive && !reliving ? onPickAlternative : null"
+      />
     </section>
 
     <div class="actions">
-      <button :disabled="!game.canRelive" @click="onRelive">
-        RELIVE ({{ game.reliveRemaining }} times left)
-      </button>
       <button @click="onQuit">&gt; QUIT</button>
     </div>
   </main>
 </template>
 
 <style scoped>
-.life-over { gap: 2rem; padding-top: 4rem; }
+.life-over {
+  gap: 2rem;
+  padding-top: 4rem;
+  /* Override the global .screen 980px cap — the tree benefits from extra room. */
+  max-width: 1400px;
+  padding-left: 0.8rem;
+  padding-right: 0.8rem;
+}
 .banner {
   font-size: clamp(2rem, 6vw, 3.2rem);
   letter-spacing: 0.5em;
@@ -51,6 +78,20 @@ const onQuit   = () => game.quit()
   border-top: 1px solid var(--line);
   padding-top: 1.5rem;
 }
+.tree-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+.tree-hint {
+  font-size: 0.78rem;
+  color: var(--dim);
+  letter-spacing: 0.05em;
+}
+.tree-hint.dim { opacity: 0.6; }
 
 .actions {
   display: flex;

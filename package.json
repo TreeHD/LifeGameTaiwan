@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "build": "cd frontend && npm install && npm run build",
-    "dev": "cd frontend && npm run dev",
-    "refresh-data": "cd backend && npm run refresh",
-    "pages:dev": "wrangler pages dev frontend/dist --compatibility-date=2025-01-01"
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "refresh-data": "cd backend && npm run refresh"
   },
   "devDependencies": {
-    "wrangler": "^3.90.0"
+    "wrangler": "^4.95.0"
   }
 }

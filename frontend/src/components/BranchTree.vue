@@ -1,16 +1,17 @@
 <script setup>
-// D3 branch tree.
+// Top-down decision tree with orthogonal (elbow) connectors, modelled on the
+// Mori Art Museum reference photo.
 //
-// Two modes (toggled via `showAlternatives`):
-//   - inline (during gameplay): solid path of visited nodes only, compact, vertical.
-//   - life-over: visited path plus dashed stubs for every choice the player did not pick.
-//     The dashed stubs are first-level only — we don't know where those branches would
-//     have led (the LLM never generated them). That's the design from the original work
-//     too: ghosts of paths not taken, not full alternate timelines.
+// Every history entry is a diamond. Two edges descend from each one:
+//   - picked edge — solid: straight down, 90° turn toward child, straight
+//     down to the next diamond. Label sits on the horizontal segment.
+//   - unpicked edge — dashed: straight down, 90° turn outward, ending in a
+//     hollow stub circle. Label sits on the horizontal segment. In LIFE OVER
+//     mode (showAlternatives + onPickAlternative) the label is clickable.
 //
-// Layout: hand-rolled vertical layout instead of d3.tree(). The tree is essentially a
-// trunk with optional 1-step side branches, so d3.tree's full layout pass is overkill
-// and makes the alternate stubs hard to position predictably.
+// All segments are vertical or horizontal — no diagonals. Sizes are FIXED in
+// pixels (not auto-fit by viewBox). When the tree is wider than the
+// container the wrap scrolls horizontally — fonts stay readable.
 
 import { ref, watch, onMounted, nextTick } from 'vue'
 import * as d3 from 'd3'
@@ -18,139 +19,325 @@ import * as d3 from 'd3'
 const props = defineProps({
   history: { type: Array, required: true },
   current: { type: Object, default: null },
-  showAlternatives: { type: Boolean, default: false }
+  showAlternatives: { type: Boolean, default: false },
+  onPickAlternative: { type: Function, default: null }
 })
 
 const svgEl = ref(null)
 
-const COL_X = 120        // x of trunk
-const ROW_H = 70         // px per node
-const STUB_DX = 130      // horizontal offset for unpicked branch labels
-const NODE_R = 8
+const ROW_H = 170
+const SHIFT = 220
+const STUB_REACH = 200       // horizontal reach of a dashed stub
+const STUB_DROP = 95         // vertical drop before the stub turns horizontal
+const PICKED_TURN_AT = 0.55  // 0..1 — where the picked edge turns horizontal (% of ROW_H)
+const D_SIZE = 11
+const STUB_R = 7
+const LABEL_H = 28
+const LABEL_FONT = 13
+const YEAR_FONT = 11
+const PAD = 80
+const MAX_LABEL_W = 180
+
+function labelWidth(text) {
+  let w = 0
+  for (const ch of text) w += /[一-鿿　-〿]/.test(ch) ? 15 : 8
+  return Math.max(70, Math.min(MAX_LABEL_W, w + 22))
+}
+
+function truncate(text, max) {
+  if (!text) return ''
+  let count = 0
+  let out = ''
+  for (const ch of text) {
+    const isCjk = /[一-鿿　-〿]/.test(ch)
+    const cost = isCjk ? 1 : 0.55
+    if (count + cost > max) return out + '…'
+    out += ch
+    count += cost
+  }
+  return out
+}
+
+// Build an orthogonal path: vertical, horizontal, vertical (or horizontal).
+//   pickedTurn(px, py, cx, cy, turnT) → "M px py V turnY H cx V cy"
+//   stubElbow (px, py, ex, ey)        → "M px py V ey H ex"
+function pickedPath(px, py, cx, cy, turnT) {
+  const turnY = py + (cy - py) * turnT
+  return `M ${px} ${py} V ${turnY} H ${cx} V ${cy}`
+}
+function stubPath(px, py, ex, ey) {
+  return `M ${px} ${py} V ${ey} H ${ex}`
+}
 
 function render() {
   if (!svgEl.value) return
   const svg = d3.select(svgEl.value)
   svg.selectAll('*').remove()
 
-  // Build node list: visited history + (optional) current node as the live tip
-  const nodes = props.history.map((h, i) => ({
-    i,
-    type: 'visited',
-    label: h.node,
-    year: h.year,
-    age: h.age,
-    choice: h.choice,
-    alternatives: h.alternatives || []
-  }))
-  if (props.current && !props.showAlternatives) {
-    nodes.push({
-      i: nodes.length,
-      type: 'current',
-      label: props.current.title,
-      year: `民國${props.current.year}年`,
-      age: String(props.current.age),
-      choice: '',
-      alternatives: []
+  // Pass 1 — geometry.
+  const decisions = []
+  const edges = []
+  const ghosts = []   // dimmed diamonds for abandoned RELIVE tails
+  let x = 0
+  let y = 0
+
+  // Right-right-left-left zig-zag by depth — kept as a function so abandoned
+  // branches can compute the same trunk direction at any depth.
+  const trunkDir = (depth) => Math.floor(depth / 2) % 2 === 0 ? +1 : -1
+
+  for (let i = 0; i < props.history.length; i++) {
+    const h = props.history[i]
+    decisions.push({ x, y, entry: h })
+    const pickedDir = trunkDir(i)
+    const nextX = x + pickedDir * SHIFT
+    const nextY = y + ROW_H
+
+    edges.push({
+      kind: 'picked',
+      px: x, py: y, cx: nextX, cy: nextY,
+      // Label sits on the horizontal segment at turnY between x and nextX.
+      labelX: (x + nextX) / 2,
+      labelY: y + (nextY - y) * PICKED_TURN_AT,
+      label: h.choice
     })
-  }
 
-  if (nodes.length === 0) return
-
-  const totalH = nodes.length * ROW_H + 80
-  const totalW = props.showAlternatives ? COL_X * 2 + STUB_DX + 200 : COL_X * 2 + 200
-  svg.attr('viewBox', `0 0 ${totalW} ${totalH}`).attr('width', '100%').attr('height', totalH)
-
-  // Trunk lines (visited path)
-  for (let i = 0; i < nodes.length - 1; i++) {
-    const y1 = 40 + i * ROW_H
-    const y2 = 40 + (i + 1) * ROW_H
-    svg.append('line')
-      .attr('x1', COL_X).attr('y1', y1)
-      .attr('x2', COL_X).attr('y2', y2)
-      .attr('stroke', 'var(--line)')
-      .attr('stroke-width', 1.2)
-  }
-
-  // Nodes + labels
-  nodes.forEach((n, idx) => {
-    const y = 40 + idx * ROW_H
-
-    // Year on the left
-    svg.append('text')
-      .attr('x', COL_X - 28).attr('y', y + 4)
-      .attr('text-anchor', 'end')
-      .attr('fill', 'var(--dim)')
-      .attr('font-family', 'var(--font-mono)')
-      .attr('font-size', 11)
-      .text(`${n.year} ${n.age}歲`)
-
-    // Diamond for decision points, circle for terminal
-    const isLast = idx === nodes.length - 1
-    if (isLast && props.showAlternatives) {
-      svg.append('circle')
-        .attr('cx', COL_X).attr('cy', y).attr('r', NODE_R)
-        .attr('fill', 'var(--bg)').attr('stroke', 'var(--fg)').attr('stroke-width', 1.5)
-    } else {
-      svg.append('rect')
-        .attr('x', COL_X - NODE_R).attr('y', y - NODE_R)
-        .attr('width', NODE_R * 2).attr('height', NODE_R * 2)
-        .attr('transform', `rotate(45 ${COL_X} ${y})`)
-        .attr('fill', n.type === 'current' ? 'var(--bg)' : 'var(--fg)')
-        .attr('stroke', 'var(--fg)').attr('stroke-width', 1.5)
+    // Render abandoned RELIVE tails as dimmed columns dropping off the
+    // unpicked side. Each branch gets its own column so multiple relives at
+    // the same fork stay visually distinct. When a branch exists, it replaces
+    // the dashed clickable stub on that side (the player has already picked
+    // that path — no point letting them re-relive into it).
+    const branches = h.abandoned_branches || []
+    let stubReplaced = false
+    if (branches.length > 0) {
+      const altDir = -pickedDir
+      branches.forEach((branch, bIdx) => {
+        const colX = x + altDir * (STUB_REACH + bIdx * SHIFT)
+        // Elbow from fork down to column top.
+        edges.push({
+          kind: 'ghost-spine',
+          px: x, py: y,
+          cx: colX, cy: y + STUB_DROP,
+          labelX: (x + colX) / 2,
+          labelY: y + STUB_DROP,
+          label: branch.from_choice_label || '原本走的路'
+        })
+        // Walk the tail entries straight down.
+        for (let j = 0; j < branch.entries.length; j++) {
+          const tailY = y + STUB_DROP + ROW_H * (j + 1)
+          ghosts.push({ x: colX, y: tailY, label: branch.entries[j].choice })
+          edges.push({
+            kind: 'ghost-tail',
+            px: colX, py: y + STUB_DROP + ROW_H * j,
+            cx: colX, cy: tailY,
+            labelX: colX,
+            labelY: y + STUB_DROP + ROW_H * j + ROW_H * 0.55,
+            label: branch.entries[j].choice
+          })
+        }
+        // If the abandoned run ended in LIFE OVER, cap the column.
+        if (branch.ending) {
+          const tailLen = branch.entries.length
+          ghosts.push({
+            x: colX,
+            y: y + STUB_DROP + ROW_H * tailLen + 8,
+            kind: 'end-cap'
+          })
+        }
+      })
+      stubReplaced = true
     }
 
-    // Node title + chosen choice on the right
-    svg.append('text')
-      .attr('x', COL_X + 22).attr('y', y - 2)
-      .attr('fill', 'var(--fg)')
-      .attr('font-family', 'var(--font-mono)')
-      .attr('font-size', 12)
-      .text(n.label)
-
-    if (n.choice) {
-      svg.append('text')
-        .attr('x', COL_X + 22).attr('y', y + 14)
-        .attr('fill', 'var(--dim)')
-        .attr('font-family', 'var(--font-mono)')
-        .attr('font-size', 11)
-        .text(`→ ${n.choice}`)
-    }
-
-    // Dashed stubs for paths not taken (LIFE OVER mode)
-    if (props.showAlternatives && n.alternatives.length > 1) {
-      const notPicked = n.alternatives.filter(a => !a.picked)
-      const stubBaseX = COL_X
-      const stubY = y
-      // Lay them out fanning to the right; trim to 4 to keep readable
-      notPicked.slice(0, 4).forEach((alt, k) => {
-        const angle = -0.4 + k * 0.25
-        const dx = STUB_DX
-        const dy = Math.sin(angle) * 28
-        const x2 = stubBaseX + dx
-        const y2 = stubY + dy
-        svg.append('line')
-          .attr('x1', stubBaseX).attr('y1', stubY)
-          .attr('x2', x2).attr('y2', y2)
-          .attr('stroke', 'var(--line-faded)')
-          .attr('stroke-width', 1)
-          .attr('stroke-dasharray', '3 3')
-        svg.append('circle')
-          .attr('cx', x2).attr('cy', y2).attr('r', 3)
-          .attr('fill', 'none')
-          .attr('stroke', 'var(--line-faded)')
-        svg.append('text')
-          .attr('x', x2 + 8).attr('y', y2 + 3)
-          .attr('fill', 'var(--line-faded)')
-          .attr('font-family', 'var(--font-mono)')
-          .attr('font-size', 10)
-          .text(alt.label)
+    if (!stubReplaced && props.showAlternatives && h.alternatives?.length >= 2) {
+      const altDir = -pickedDir
+      const stubEndX = x + altDir * STUB_REACH
+      const stubEndY = y + STUB_DROP
+      const altLabel = h.alternatives.find(a => !a.picked)?.label || '另一條路'
+      edges.push({
+        kind: 'unpicked',
+        px: x, py: y, cx: stubEndX, cy: stubEndY,
+        labelX: (x + stubEndX) / 2,
+        labelY: stubEndY,
+        label: altLabel,
+        historyIndex: i,
+        clickable: !!props.onPickAlternative
       })
     }
-  })
+
+    x = nextX
+    y = nextY
+  }
+
+  let tip = null
+  if (props.current && !props.showAlternatives) {
+    tip = { x, y, kind: 'current', node: props.current }
+  } else if (props.showAlternatives && props.history.length > 0) {
+    tip = { x, y, kind: 'end' }
+  }
+
+  // Pass 2 — bounding box (fixed pixels, no auto-shrink).
+  const allXs = [
+    ...decisions.map(p => p.x),
+    ...edges.map(e => e.cx),
+    ...ghosts.map(g => g.x),
+    tip?.x ?? 0
+  ]
+  const allYs = [
+    ...decisions.map(p => p.y),
+    ...edges.map(e => e.cy),
+    ...ghosts.map(g => g.y),
+    tip?.y ?? 0
+  ]
+  if (allXs.length === 0) {
+    svg.attr('width', 0).attr('height', 0)
+    return
+  }
+  const minX = Math.min(...allXs) - MAX_LABEL_W / 2 - PAD
+  const maxX = Math.max(...allXs) + MAX_LABEL_W / 2 + PAD
+  const minY = Math.min(...allYs) - PAD
+  const maxY = Math.max(...allYs) + PAD
+  const W = Math.ceil(maxX - minX)
+  const H = Math.ceil(maxY - minY)
+
+  svg.attr('viewBox', `${minX} ${minY} ${W} ${H}`)
+     .attr('width', W)
+     .attr('height', H)
+     .attr('preserveAspectRatio', 'xMinYMin meet')
+
+  // Pass 3 — edges (drawn first so diamonds sit on top).
+  for (const e of edges) {
+    const isUnpicked = e.kind === 'unpicked'
+    const isGhostSpine = e.kind === 'ghost-spine'
+    const isGhostTail = e.kind === 'ghost-tail'
+    const isGhost = isGhostSpine || isGhostTail
+    const dimmed = isUnpicked || isGhost
+
+    const d = isUnpicked || isGhostSpine
+      ? stubPath(e.px, e.py, e.cx, e.cy)
+      : isGhostTail
+        ? `M ${e.px} ${e.py} V ${e.cy}`
+        : pickedPath(e.px, e.py, e.cx, e.cy, PICKED_TURN_AT)
+
+    svg.append('path')
+      .attr('d', d)
+      .attr('stroke', dimmed ? 'var(--line-faded)' : 'var(--fg)')
+      .attr('stroke-width', dimmed ? 1.2 : 1.8)
+      .attr('stroke-dasharray', dimmed ? '4 4' : null)
+      .attr('stroke-linejoin', 'miter')
+      .attr('fill', 'none')
+      .attr('opacity', isGhost ? 0.7 : 1)
+
+    if (isUnpicked) {
+      svg.append('circle')
+        .attr('cx', e.cx).attr('cy', e.cy).attr('r', STUB_R)
+        .attr('fill', 'var(--bg)')
+        .attr('stroke', 'var(--line-faded)')
+        .attr('stroke-width', 1.2)
+    }
+
+    const text = truncate(e.label, dimmed ? 11 : 13)
+    const w = labelWidth(text)
+
+    const g = svg.append('g')
+      .attr('transform', `translate(${e.labelX}, ${e.labelY})`)
+      .attr('class', e.clickable ? 'edge-label clickable' : 'edge-label')
+      .attr('opacity', isGhost ? 0.7 : 1)
+
+    g.append('rect')
+      .attr('x', -w / 2).attr('y', -LABEL_H / 2)
+      .attr('width', w).attr('height', LABEL_H)
+      .attr('fill', 'var(--bg)')
+      .attr('stroke', dimmed ? 'var(--line-faded)' : 'var(--fg)')
+      .attr('stroke-width', 1.2)
+
+    g.append('text')
+      .attr('text-anchor', 'middle')
+      .attr('dominant-baseline', 'middle')
+      .attr('fill', dimmed ? 'var(--dim)' : 'var(--fg)')
+      .attr('font-family', 'var(--font-mono)')
+      .attr('font-size', LABEL_FONT)
+      .text(text)
+
+    if (e.clickable) {
+      g.style('cursor', 'pointer')
+      g.on('click', () => props.onPickAlternative(e.historyIndex))
+    }
+  }
+
+  // Pass 3b — ghost diamonds (abandoned RELIVE tail decision points).
+  for (const gh of ghosts) {
+    if (gh.kind === 'end-cap') {
+      svg.append('line')
+        .attr('x1', gh.x - 14).attr('y1', gh.y)
+        .attr('x2', gh.x + 14).attr('y2', gh.y)
+        .attr('stroke', 'var(--line-faded)').attr('stroke-width', 1.5)
+        .attr('opacity', 0.7)
+      svg.append('text')
+        .attr('x', gh.x).attr('y', gh.y + 18)
+        .attr('text-anchor', 'middle')
+        .attr('fill', 'var(--dim)')
+        .attr('font-family', 'var(--font-mono)').attr('font-size', YEAR_FONT)
+        .attr('letter-spacing', 1.5)
+        .attr('opacity', 0.7)
+        .text('LIFE OVER')
+      continue
+    }
+    svg.append('rect')
+      .attr('x', gh.x - D_SIZE + 2).attr('y', gh.y - D_SIZE + 2)
+      .attr('width', (D_SIZE - 2) * 2).attr('height', (D_SIZE - 2) * 2)
+      .attr('transform', `rotate(45 ${gh.x} ${gh.y})`)
+      .attr('fill', 'var(--bg)')
+      .attr('stroke', 'var(--line-faded)')
+      .attr('stroke-width', 1.2)
+      .attr('opacity', 0.7)
+  }
+
+  // Pass 4 — diamonds + year/age caption.
+  for (const p of decisions) {
+    svg.append('rect')
+      .attr('x', p.x - D_SIZE).attr('y', p.y - D_SIZE)
+      .attr('width', D_SIZE * 2).attr('height', D_SIZE * 2)
+      .attr('transform', `rotate(45 ${p.x} ${p.y})`)
+      .attr('fill', 'var(--fg)')
+      .attr('stroke', 'var(--fg)')
+
+    svg.append('text')
+      .attr('x', p.x).attr('y', p.y - D_SIZE - 8)
+      .attr('text-anchor', 'middle')
+      .attr('fill', 'var(--dim)')
+      .attr('font-family', 'var(--font-mono)')
+      .attr('font-size', YEAR_FONT)
+      .text(`${p.entry.year} ・ ${p.entry.age}歲`)
+  }
+
+  // Pass 5 — tip.
+  if (tip?.kind === 'current') {
+    svg.append('rect')
+      .attr('x', tip.x - D_SIZE).attr('y', tip.y - D_SIZE)
+      .attr('width', D_SIZE * 2).attr('height', D_SIZE * 2)
+      .attr('transform', `rotate(45 ${tip.x} ${tip.y})`)
+      .attr('fill', 'var(--bg)').attr('stroke', 'var(--fg)').attr('stroke-width', 2)
+    svg.append('text')
+      .attr('x', tip.x).attr('y', tip.y + D_SIZE + 22)
+      .attr('text-anchor', 'middle')
+      .attr('fill', 'var(--fg)')
+      .attr('font-family', 'var(--font-mono)').attr('font-size', LABEL_FONT)
+      .text(truncate(tip.node.title, 14))
+  } else if (tip?.kind === 'end') {
+    svg.append('line')
+      .attr('x1', tip.x - 18).attr('y1', tip.y)
+      .attr('x2', tip.x + 18).attr('y2', tip.y)
+      .attr('stroke', 'var(--fg)').attr('stroke-width', 2.4)
+    svg.append('text')
+      .attr('x', tip.x).attr('y', tip.y + 26)
+      .attr('text-anchor', 'middle')
+      .attr('fill', 'var(--dim)')
+      .attr('font-family', 'var(--font-mono)').attr('font-size', YEAR_FONT)
+      .attr('letter-spacing', 2)
+      .text('LIFE OVER')
+  }
 }
 
-watch(() => [props.history, props.current, props.showAlternatives], () => {
+watch(() => [props.history, props.current, props.showAlternatives, props.onPickAlternative], () => {
   nextTick(render)
 }, { deep: true })
 
@@ -166,11 +353,20 @@ onMounted(() => render())
 <style scoped>
 .branch-tree-wrap {
   width: 100%;
-  overflow-x: auto;
+  overflow: auto;
   padding: 0.5rem 0;
 }
 .branch-tree {
   display: block;
-  min-width: 480px;
+}
+.branch-tree :deep(.edge-label.clickable) rect {
+  transition: stroke 0.15s, fill 0.15s;
+}
+.branch-tree :deep(.edge-label.clickable):hover rect {
+  stroke: var(--fg);
+  fill: var(--fg);
+}
+.branch-tree :deep(.edge-label.clickable):hover text {
+  fill: var(--bg);
 }
 </style>

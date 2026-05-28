@@ -216,6 +216,119 @@ function pickOpportunityHint(lastAge) {
   return pool[Math.floor(Math.random() * pool.length)]
 }
 
+// Curveball bank — the "wait, what?" beats.
+//
+// Drama and opportunity both tilt life along a recognisable axis (work,
+// money, family, health, romance). Without something else, the LLM falls into
+// a smooth groove of similar beats: a string of work crises, a string of
+// family dramas, a string of upward turns. Real lives have moments that don't
+// fit any of those tracks — a stranger who changes everything, a year lost to
+// an obsession, a discovery that reframes the past.
+//
+// Roll rate ~20%. These are designed to break the pattern but still be
+// grounded enough that the LLM can weave them in: each entry is a single
+// concrete situation, not pure surrealism. The LLM is told to keep the
+// before/after consistent with the existing trajectory — the curveball is a
+// detour, not a reset.
+const CURVEBALL_POOL = [
+  // — 突如其來的人 —
+  '一個陌生人在你最沒預期的時刻闖進你的人生（捷運上、加油站、急診室、深夜的便利商店）。短短幾分鐘的交集，但這個人說的某句話、做的某件事，讓你接下來幾年都在想。',
+  '一封寄錯/寄遲/根本不該寄到的信（或 Email、簡訊、LINE 訊息）落到你手上。內容跟你某段過去意外有關，逼你重新檢視一段你以為已經結束的事。',
+  '一通深夜的陌生電話——對方堅持你是某個多年前他在找的人，你掛電話後查資料才發現他不完全是錯的。',
+  '一個流浪漢/街友/路邊老人對你講了一段你完全沒辦法解釋他怎麼會知道的話。事情發生時你覺得是巧合，多年後想起來還會發抖。',
+  '你在二手店/跳蚤市場/路邊攤撿到一個物件（一本舊筆記本、一張底片、一條項鍊、一隻舊手機），裡面藏著的東西讓你做了一件完全不在計劃中的事。',
+  '你在公共場合（銀行、醫院、洗衣店、餐廳）目睹一件你不該介入的事。你那一瞬間做的選擇——介入或走開——在接下來幾個月反覆出現在腦子裡。',
+
+  // — 意外的著迷 —
+  '你迷上一個別人覺得很奇怪的東西（業餘無線電、深夜釣魚、宮廟陣頭、修古董打字機、線上推理小組、某個小眾遊戲的 speedrun）。家人朋友不懂，但這件事佔據你接下來幾年的大部分週末。',
+  '你陷入一個你本來不相信的東西——可能是塔羅、星座、宮廟問事、某種能量療法、某個 podcast 的世界觀。一開始是好玩，但你越來越認真。',
+  '你開始寫日記/拍 vlog/做 podcast/畫漫畫，本來只是給自己看，後來變成一種你不能停的儀式。沒人知道你在做這件事。',
+  '你在某個語言/某個樂器/某個冷門技能上著迷到不合理的程度（學閩南語老歌、自學日文古文、練竹笛、練習魔術、學手語）。沒有實用目的，但你停不下來。',
+
+  // — 過去突然回來 —
+  '你發現家裡有一個從來沒人提過的親戚（爸爸的哥哥、媽媽的妹妹、阿公的私生子）。為什麼三十年沒人提，是個謎。',
+  '你發現自己童年某段「記憶」其實是錯的——一張舊照片、一個親戚的閒聊、一張收據——讓你開始懷疑你以為發生過的事到底發生過沒有。',
+  '某個多年前你以為徹底結束的事情（一份工作的官司、一段網路爭吵、一次誤會、一封被忽略的信）在多年後突然找上門，要你回應。',
+  '你在整理東西時翻到自己學生時代寫的東西，內容尖銳到你完全認不出當時的自己。你不知道該不該把它銷毀。',
+
+  // — 短暫的另一種人生 —
+  '你被誤認為另一個人——可能是雙胞胎、長相相似、同名同姓、某個你不認識的人在通緝/在等你——你必須短暫扮演那個身分（澄清前的幾個小時、幾天、甚至幾週）。',
+  '你陷入一個短暫的副業/兼職/合作，性質跟你主業完全不同（專業會計師去當國中代課老師、工程師去釀酒、上班族去當電影臨演、家庭主婦去當網紅助理）。短短幾個月，但讓你看見另一個版本的自己。',
+  '你跟著朋友/伴侶/家人去了一個你從來不會主動參加的場合（宗教退修會、政治造勢、傳銷大會、養生團、修行營、地下俱樂部）。你本來只是去陪，結果在裡面看到一些讓你睡不好的東西。',
+  '你被選/被推舉/被誤點名擔任一個你完全不想要的角色（社區大樓主委、家族喪事召集人、班級家長會長、宮廟爐主、同學會總召）。要不要扛是個決定，扛下來會佔掉你接下來一年的時間。',
+  '你意外被困在一個地方一段時間（颱風、班機取消、隔離、家人住院、車禍復健），有大把時間做你平常不會做的事——讀完一本長書、跟陌生病友變成朋友、學一個新技能、想清楚某件事。',
+
+  // — 怪異但真實的台灣場景 —
+  '你家附近的廟突然變成新聞主角（神明託夢、靈異事件、爐主爭議、廟產糾紛），你被迫站隊。',
+  '你在 LINE 群組/Threads/Dcard 上的一段話被某個新聞 KOL 截圖出征。你變成短暫的網路話題，認識的人和不認識的人對你有各種反應。',
+  '你的某個遠房親戚（或鄰居老人）過世前指名要把某樣東西交給你——一塊地、一隻貓、一個秘密、一筆錢、一個未完成的承諾。你不知道為什麼是你。',
+  '你接到一通很奇怪的詐騙電話/簡訊/信件，但對方知道的細節讓你發毛。你開始懷疑是不是身邊的人洩漏了什麼。',
+  '你買的房子/租的房子發生一些「說不上來」的事（不是凶宅、不是漏水，但就是不對勁）。你開始研究風水、找師父、或者乾脆搬走。',
+  '你被選為某個訴訟案/某個社會事件的關鍵證人/被害者/旁觀者。媒體找上你，你必須決定要不要出聲。',
+
+  // — 內在的爆炸 —
+  '你某天突然意識到自己「變成了你曾經看不起的那種人」——可能是當年討厭的長輩、害怕的同事、嘲笑過的某種類型。這個察覺改變了你接下來看自己的方式。',
+  '你做了一個極其奇怪的夢/或經歷一段短暫的失眠/或在一場演講/喪禮/婚禮中突然崩潰大哭。事後你跟自己解釋「就是累了」，但你知道不是。',
+  '你開始相信一件你以前會嘲笑的事（前世今生、能量、命中註定、某種陰謀論）。你不敢跟身邊人說，但這個信念改變了你對日常的某些選擇。',
+  '你做了一件完全不像你會做的事（衝動辭職、把存款捐掉一半、剃光頭、跟陌生人去旅行、寄一封多年沒寄出的信）。事後你也不完全確定為什麼。'
+]
+
+function pickCurveballHint() {
+  // ~20% — designed to land roughly once every 5-6 nodes, breaking the rhythm
+  // of drama/opportunity/macro without taking over the story.
+  if (Math.random() > 0.20) return null
+  return CURVEBALL_POOL[Math.floor(Math.random() * CURVEBALL_POOL.length)]
+}
+
+// Decide which cast members to surface to the LLM this turn.
+//
+// Goal: stop "every old name keeps appearing forever". A person's chance of
+// being relevant *this node* depends on:
+//   - relationship class (spouse/child = always; ex/friend/coworker = decays)
+//   - years since last seen (decays exponentially for non-permanent ties)
+//
+// Permanent ties get included regardless. Everyone else rolls per-entry.
+// Result: the cast block stays small and feels selective, instead of an
+// ever-growing list the LLM is told to recycle from.
+function sampleVisibleCast(fullCast, currentAge) {
+  if (!fullCast?.length) return []
+  const PERMANENT = /配偶|妻|夫|老婆|老公|伴侶|孩子|子女|兒子|女兒|父|母|爸|媽|阿公|阿嬤/
+  const SEMI_PERMANENT = /兄|姊|弟|妹|手足|岳|公婆/
+
+  const out = []
+  for (const c of fullCast) {
+    const role = (c.role || '') + ' ' + (c.relation || '')
+    const yearsAgo = Math.max(0, currentAge - (c.last_seen_age ?? currentAge))
+
+    if (PERMANENT.test(role)) {
+      out.push(c)
+      continue
+    }
+    if (SEMI_PERMANENT.test(role)) {
+      // Family of origin: ~60% baseline, decays slowly
+      if (Math.random() < Math.max(0.25, 0.6 - yearsAgo * 0.02)) out.push(c)
+      continue
+    }
+    // Everyone else (classmates, exes, coworkers, neighbours): exponential decay.
+    // ~50% one year out, ~30% five years out, ~10% twenty years out.
+    const p = 0.55 * Math.exp(-yearsAgo / 12)
+    if (Math.random() < p) out.push(c)
+  }
+
+  // Hard cap so we never spam the LLM with too many at once.
+  if (out.length > 5) {
+    // Keep permanent + most-recent up to 5
+    out.sort((a, b) => {
+      const aPerm = PERMANENT.test((a.role || '') + (a.relation || ''))
+      const bPerm = PERMANENT.test((b.role || '') + (b.relation || ''))
+      if (aPerm !== bPerm) return aPerm ? -1 : 1
+      return (b.last_seen_age ?? 0) - (a.last_seen_age ?? 0)
+    })
+    return out.slice(0, 5)
+  }
+  return out
+}
+
 // World-historical events that hit everyone, anchored to calendar years.
 // Different from DRAMA_POOL: these are macro shocks that the LLM should
 // reference by name (COVID、川普關稅、烏俄戰爭) so the life feels embedded in
@@ -530,34 +643,43 @@ function statsBlock(stats, character = null) {
   return lines.length ? lines.join('\n') : '（無即時統計資料）'
 }
 
-export function promptCharacter(stats, archetype = null) {
+export function promptCharacter(stats, archetype = null, gender = null, dream = '') {
   const thisYear  = currentYear()
   const birthYear = thisYear - 12
 
   const archeBlock = archetype ? `\n${archetypeBlock(archetype)}\n` : ''
+  const genderLabel = gender === 'female' ? '女' : gender === 'male' ? '男' : null
+  const genderRule = genderLabel
+    ? `2. 性別：**必須是「${genderLabel}」**（系統預先擲定，請依此挑選名字與代名詞）。`
+    : `2. 性別：男女各 50% 隨機（不要每次都生男生）。`
   const placeRule = archetype?.place
-    ? `1. 角色目前 12 歲，剛升上國中一年級，出生年:${birthYear}。
-2. 出生地：**必須是「${archetype.place}」**（人生原型已指定）。`
-    : `1. 角色目前 12 歲，剛升上國中一年級，出生年:${birthYear}。
-2. 出生地依台灣人口比例與家庭背景設定（傾向中南部小鎮或都會邊緣）。`
+    ? `3. 出生地：**必須是「${archetype.place}」**（人生原型已指定）。`
+    : `3. 出生地依台灣人口比例與家庭背景設定（傾向中南部小鎮或都會邊緣）。`
+  const dreamBlock = dream
+    ? `\n【玩家為這個角色說出的願望】\n「${dream}」\n這是玩家替這個 12 歲的孩子預先說出的心願。請讓 summary 中至少隱約呼應這份心願——可能是孩子的某個興趣、某個被忽略的天賦、家裡某個讓他嚮往的東西，但**不要讓 12 歲的孩子直接說出這個夢想**（孩子自己還說不清楚）。\n`
+    : ''
 
   const system = `你是「台灣人生模擬」的角色生成引擎。
-根據以下台灣 ${thisYear} 年最新統計資料、以及指定的人生原型，生成一個剛上國中、12 歲的虛構台灣人。
-${archeBlock}
+根據以下台灣 ${thisYear} 年最新統計資料、指定的人生原型、以及玩家替孩子說出的願望，生成一個剛上國中、12 歲的虛構台灣人。
+${archeBlock}${dreamBlock}
 【台灣現況統計】
 ${statsBlock(stats)}
 
 【生成規則】
+1. 角色目前 12 歲，剛升上國中一年級，出生年:${birthYear}。
+${genderRule}
 ${placeRule}
-3. 家庭背景必須完全符合上方人生原型的「家庭」設定。
-4. personality 必須延續上方原型的「個性傾向」。
-5. summary 要明確帶到原型的「關鍵設定」（例如住在哪個區、家裡什麼味道、學校什麼狀況）。
-6. 此時還沒有自己的職業，只有「現在的學業狀態」與「家庭環境」。
-7. education_path 此時是「未定」——之後的人生節點才會分流到技職/普高/直升等。
+4. 名字：必須符合性別。${genderLabel === '女' ? '女生請用台灣常見女性名字（例如「雅婷」「怡君」「家瑜」「佳穎」「思妤」）。' : genderLabel === '男' ? '男生請用台灣常見男性名字（例如「冠廷」「宗翰」「彥廷」「俊宏」「家豪」）。' : '名字必須符合所選性別。'}
+5. 家庭背景必須完全符合上方人生原型的「家庭」設定。
+6. personality 必須延續上方原型的「個性傾向」。
+7. summary 要明確帶到原型的「關鍵設定」（例如住在哪個區、家裡什麼味道、學校什麼狀況），並隱約呼應玩家替他說出的願望。
+8. 此時還沒有自己的職業，只有「現在的學業狀態」與「家庭環境」。
+9. education_path 此時是「未定」——之後的人生節點才會分流到技職/普高/直升等。
 
 嚴格輸出 JSON,不含多餘文字:
 {
-  "name": "台灣常見姓名",
+  "name": "台灣常見姓名（必須符合性別）",
+  "gender": "${genderLabel || '男 或 女'}",
   "birth_year": ${birthYear},
   "birth_place": "縣市",
   "family_background": "一句話描述家庭",
@@ -566,9 +688,9 @@ ${placeRule}
   "current_status": "國中一年級在學中,加入學區/補習/興趣等具體細節",
   "personality": "個性特質一句話",
   "current_age": 12,
-  "summary": "100字左右的角色介紹,第三人稱,要呼應人生原型的關鍵設定"
+  "summary": "100字左右的角色介紹,第三人稱,要呼應人生原型的關鍵設定，並隱約帶到玩家說出的願望"
 }`
-  return { system, user: '請依照人生原型生成這個 12 歲的角色。' }
+  return { system, user: '請依照人生原型與玩家願望生成這個 12 歲的角色。' }
 }
 
 export function promptNextNode(character, history, stats, archetype = null) {
@@ -600,26 +722,43 @@ export function promptNextNode(character, history, stats, archetype = null) {
 ${lastState.notable ? `- 備註：${lastState.notable}` : ''}\n`
     : ''
 
-  // Accumulate the "cast" — every named person who has appeared in this life
-  // so the LLM has someone specific to bring back as 重逢/同學會/前任聯絡 etc.
+  // lastAge is computed before the cast block because the cast filter uses it
+  // (years-since-last-seen decay) — keep this declaration above any consumer.
+  const lastAge = history.length === 0
+    ? (character?.current_age ?? 12)
+    : parseInt(history[history.length - 1].age, 10)
+
+  // Cast accumulation. Past nodes name specific people; we want them to
+  // *sometimes* return so the life feels populated, but not crowd out new
+  // characters. The earlier version just dumped every name to the LLM and
+  // told it to reuse them — result: every node circled back to the same
+  // people forever.
+  //
+  // Now: build the full map (still used for "latest mention wins" semantics),
+  // then filter by a per-entry probability that decays with how long it's
+  // been since they were on screen, modulated by relationship type.
   const castMap = new Map()
   for (const h of history) {
     for (const c of (h.cast || [])) {
       if (!c?.name) continue
-      // Latest mention wins (status may have changed: 同學 → 前任 → 老朋友)
       castMap.set(c.name, { ...castMap.get(c.name), ...c, last_seen_age: h.age })
     }
   }
-  const castList = [...castMap.values()]
-  const castBlock = castList.length === 0
-    ? '  （目前還沒有出現過具名的人）'
-    : castList.map(c =>
+  const fullCast = [...castMap.values()]
+  const visibleCast = sampleVisibleCast(fullCast, lastAge)
+  const castBlock = visibleCast.length === 0
+    ? '  （目前沒有特別需要追蹤的具名人物——這個節點可以自由認識新的人）'
+    : visibleCast.map(c =>
         `  - ${c.name}（${c.role || '?'}；與你的關係:${c.relation || '?'}；上次出現:${c.last_seen_age}歲）${c.note ? '——' + c.note : ''}`
       ).join('\n')
 
-  const lastAge = history.length === 0
-    ? (character?.current_age ?? 12)
-    : parseInt(history[history.length - 1].age, 10)
+  // Independent flag: meet a brand-new person this node. Without this the
+  // LLM defaults to recycling cast even when the cast block is short.
+  const meetNew = Math.random() < 0.35
+  const meetNewBlock = meetNew
+    ? `\n【👤 認識新的人（這個節點請讓一個全新的具名人物登場）】\n不要把焦點放在名冊上的舊人——讓 situation 中出現一個之前沒提過的新名字（同事、新鄰居、相親對象、伴侶的朋友、新主管、客戶、孩子的老師、健身房認識的、社區的人、論壇上的網友等等，年齡情境合理即可）。\n舊人可以仍然在你的生活背景裡，但不要讓他們搶這個節點的戲份。\n`
+    : ''
+
 
   let ageStep
   if (lastAge < 15)      ageStep = 3
@@ -663,9 +802,19 @@ ${lastState.notable ? `- 備註：${lastState.notable}` : ''}\n`
     ? `\n【🌍 此時的台灣與世界（${macro.charYear} 年）】\n${macro.name}：${macro.hint}\n請讓這個節點的情境真實反映這個時代背景——可以是直接衝擊（失業、回國、染疫、被裁員），也可以是擦邊（朋友的事、新聞引發的對話、日常被打亂的小事）。\n`
     : ''
 
+  // Curveball — break the rhythm. When this fires, the LLM is told to step
+  // off the obvious next-beat track. The curveball still has to land inside
+  // the existing trajectory (no waking up in a different country with no
+  // explanation), but it pulls the story in a direction the previous nodes
+  // didn't predict.
+  const curveball = pickCurveballHint()
+  const curveballBlock = curveball
+    ? `\n【🎲 跳出框架（這個節點請打破之前的節奏）】\n${curveball}\n\n這個提示是要讓人生**不要太連貫**——前幾個節點如果都是工作/感情線，這個節點就讓它岔開到完全不同的軸；如果前幾個節點都很沉重，這個節點可以是一個怪異但真實的小插曲。\n\n但有兩個底線必須守住：\n（1）**起點要從「目前狀態」自然走出去**——人物還是在原本的地點、年齡、處境，不可以無預警把人空降到別的人生。\n（2）**這個事件結束後，角色不會憑空變成另一個人**——選項的兩個方向應該是「讓這件事改變我多少」而不是「忽略這件事」 vs 「重新投胎」。\n`
+    : ''
+
   const system = `你是台灣版人生模擬的關卡設計師。
 根據角色背景、選擇歷史、台灣當前統計、人生原型、以及此時的時代背景，生成下一個人生決策節點。
-${archeBlock}${dramaBlock}${oppBlock}${macroBlock}
+${archeBlock}${dramaBlock}${oppBlock}${macroBlock}${curveballBlock}${meetNewBlock}
 【台灣現況統計（★ 標記角色所在地）】
 ${statsBlock(stats, character)}
 
@@ -675,10 +824,11 @@ ${statsBlock(stats, character)}
 3. 台灣特色:融入真實台灣場景(會考、學測、108課綱、繁星、台積電效應、健保、房價、北漂、少子化、長照等),並反映上方統計趨勢(例如失業率高的時期，找工作節點要更難)。
 4. 真實取捨:選項之間不能有明顯「正確答案」,每個選項都帶有代價。
 5. 視角:situation 必須以第二人稱「你」描寫,貼近這個年齡的生活感。
-6. **角色記憶（重要）**:
+6. **角色記憶（重要，但不要過度依賴）**:
    - situation 中出現的具體人物**必須具名**（例如「同學小婕」「補習班認識的阿凱」「直屬上司王經理」），不要只用「同學」「同事」帶過。
-   - **看下方「角色名冊」**——如果 situation 提到名冊上已存在的人，請用同一個名字。
-   - 至少每 2-3 個節點，**讓名冊上的舊人重新出現一次**：可以是同學會、社群媒體聯絡、職場巧遇、共同朋友介紹、葬禮喜宴、市場巷口偶遇——配合年齡與情境合理化。
+   - **看下方「角色名冊」**——這份名冊已經依照角色的關係類型與時間遠近自動過濾，**只列出此時還合理會出現在角色生活裡的人**。沒有列在上面的舊人，這一節點就不要硬把他塞回來。
+   - 名冊上的人不是必須出現的——只在情境真的合理時才讓他們重逢（同學會、Facebook 聯絡、職場巧遇、葬禮喜宴、市場巷口偶遇）。**不要每節點都硬塞舊人**——人生很多節點主角根本是陌生人。
+   - 父母、配偶、子女這類永遠的關係可以自然出現在背景；同學、前任、舊同事的回歸要克制——他們重逢一次就夠了，不要連續多節點都圍繞同一個舊人。
    - 重逢可以是溫暖、尷尬、誘惑、遺憾——任何一種，但要讓玩家感受到「這個人真的活在你的人生裡」。
 7. **感情與工作的真實拉扯**:
    - 不是每個節點都要關於感情，但若年齡合適,**至少 1/3 的節點應該包含感情/家庭面向**（戀愛、分手、結婚壓力、外遇試探、伴侶要不要跟你北漂、孩子要不要生、配偶生病等）。
@@ -757,9 +907,17 @@ ${castBlock}
 }
 
 export function promptEnding(character, history, archetype = null) {
+  // Feed the LLM the full situation of every node, not just the headline.
+  // Without this the ending reads as if the writer only saw the table of
+  // contents, and contradicts moments the player actually lived through.
   const trajectory = history
-    .map(h => `  ${h.year}（${h.age}歲）${h.node}：「${h.choice}」`)
-    .join('\n')
+    .map(h => {
+      const lines = [`▸ ${h.year}（${h.age}歲）${h.node}`]
+      if (h.situation) lines.push(`  情境：${h.situation}`)
+      lines.push(`  你的選擇：「${h.choice}」` + (h.choice_hint ? `（暗示：${h.choice_hint}）` : ''))
+      return lines.join('\n')
+    })
+    .join('\n\n')
 
   // Same cast accumulation as in promptNextNode — let the ending mention them by name.
   const castMap = new Map()
@@ -776,14 +934,28 @@ export function promptEnding(character, history, archetype = null) {
 
   const archeBlock = archetype ? `\n${archetypeBlock(archetype)}\n` : ''
 
-  const system = '你是台灣人生故事的結局撰寫者，風格溫柔誠實，不說教，不評判選擇。'
+  const lastState = [...history].reverse().find(h => h.state_after)?.state_after || null
+  const finalStateBlock = lastState
+    ? `\n【人生最後的狀態（這是事實，結局必須與此一致）】
+- 地點：${lastState.location || '?'}
+- 學歷：${lastState.education || '?'}
+- 職業：${lastState.occupation || '?'}
+- 感情：${lastState.relationship || '單身'}
+- 家庭：${lastState.family || '?'}
+- 財務：${lastState.finances || '?'}
+- 健康：${lastState.health || '健康'}
+${lastState.notable ? `- 備註：${lastState.notable}` : ''}\n`
+    : ''
+
+  const system = '你是台灣人生故事的結局撰寫者，風格溫柔誠實，不說教，不評判選擇。請仔細閱讀整段人生軌跡，結局內容必須真實呼應軌跡裡發生的事件，不可寫出與軌跡矛盾的內容。'
   const user = `${character.name}，出生於${character.birth_place}。
 夢想：${character.dream || '未說出的夢想'}
-${archeBlock}
-人生軌跡：
+${archeBlock}${finalStateBlock}
+人生軌跡（每個節點的情境與選擇都是真實發生過的，請以此為基礎寫結局）：
 ${trajectory}
 ${castLine}
 請用 250-300 字、第二人稱「你」，描述這個人退休時回望人生的心情。
+**結局必須具體呼應上方人生軌跡裡至少 2-3 個關鍵節點**（例如某個轉折、某個遺憾、某個堅持），不能只寫抽象的人生感悟。
 **至少要提到一個過去出現的具名人物**（如名冊有的話），呼應你和他的最後關係。
 最後一句話呼應他當初的夢想，但不要直接說「你實現了夢想」或「你沒有實現夢想」。
 讓讀者自己感受。
