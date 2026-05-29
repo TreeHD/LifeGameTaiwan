@@ -487,26 +487,31 @@ function sampleVisibleCast(fullCast, currentAge) {
       continue
     }
     if (SEMI_PERMANENT.test(role)) {
-      // Family of origin: ~60% baseline, decays slowly
-      if (Math.random() < Math.max(0.25, 0.6 - yearsAgo * 0.02)) out.push(c)
+      // Family of origin: ~35% baseline, decays faster than before so the
+      // brother who appeared once at 18 doesn't keep auto-surfacing at 50.
+      if (Math.random() < Math.max(0.12, 0.35 - yearsAgo * 0.04)) out.push(c)
       continue
     }
-    // Everyone else (classmates, exes, coworkers, neighbours): exponential decay.
-    // ~50% one year out, ~30% five years out, ~10% twenty years out.
-    const p = 0.55 * Math.exp(-yearsAgo / 12)
+    // Everyone else (classmates, exes, coworkers, neighbours): exponential
+    // decay. Tuned DOWN — old base 0.55 made past faces resurface in roughly
+    // every other node, which felt like a soap opera. New base 0.30 gives:
+    //   ~28% one year out, ~13% five years out, ~3% twenty years out.
+    // The LLM still gets a separate "meet a brand-new person" flag so the
+    // node won't feel empty.
+    const p = 0.30 * Math.exp(-yearsAgo / 10)
     if (Math.random() < p) out.push(c)
   }
 
   // Hard cap so we never spam the LLM with too many at once.
-  if (out.length > 5) {
-    // Keep permanent + most-recent up to 5
+  if (out.length > 4) {
+    // Keep permanent + most-recent up to 4
     out.sort((a, b) => {
       const aPerm = PERMANENT.test((a.role || '') + (a.relation || ''))
       const bPerm = PERMANENT.test((b.role || '') + (b.relation || ''))
       if (aPerm !== bPerm) return aPerm ? -1 : 1
       return (b.last_seen_age ?? 0) - (a.last_seen_age ?? 0)
     })
-    return out.slice(0, 5)
+    return out.slice(0, 4)
   }
   return out
 }
@@ -936,7 +941,12 @@ ${lastState.notable ? `- 備註：${lastState.notable}` : ''}\n`
 
   // Independent flag: meet a brand-new person this node. Without this the
   // LLM defaults to recycling cast even when the cast block is short.
-  const meetNew = Math.random() < 0.35
+  // Independent flag: meet a brand-new person this node. Bumped from 0.35
+  // because the cast sampler now hides past faces more aggressively — without
+  // a higher meet-new rate, nodes start feeling depopulated. Also scaled up
+  // when the visible cast block came back empty.
+  const meetNewBaseP = visibleCast.length === 0 ? 0.7 : 0.55
+  const meetNew = Math.random() < meetNewBaseP
   const meetNewBlock = meetNew
     ? `\n【👤 認識新的人（這個節點請讓一個全新的具名人物登場）】\n不要把焦點放在名冊上的舊人——讓 situation 中出現一個之前沒提過的新名字（同事、新鄰居、相親對象、伴侶的朋友、新主管、客戶、孩子的老師、健身房認識的、社區的人、論壇上的網友等等，年齡情境合理即可）。\n舊人可以仍然在你的生活背景裡，但不要讓他們搶這個節點的戲份。\n`
     : ''
@@ -954,10 +964,10 @@ ${lastState.notable ? `- 備註：${lastState.notable}` : ''}\n`
     lastAge < 15 ? '此階段是「國中→升學選擇」，可能出現:升高中 vs 升技職、社團選擇、補習與否、家庭經濟對教育的影響、霸凌或友誼、興趣的萌芽、第一次心動或被告白。'
     : lastAge < 18 ? '此階段是「高中職時期」，可能出現:選組(社/自/工/商)、學測 vs 補習打工、繁星推薦、**初戀（要 vs 不要）、感情 vs 衝刺學測**、第一段感情怎麼結束、家庭期待對戀愛的干涉。'
     : lastAge < 23 ? '此階段是「大學/職校/初入社會」，可能出現:科系選擇、北漂南漂讀書（**遠距離 vs 在地對象**）、兵役、第一份工作、**追夢 vs 跟對象一起穩定**、大學時代戀愛的分手或結婚決定。'
-    : lastAge < 35 ? '此階段是「青年期」，可能出現:跳槽、創業、考公職、買房第一桶金、**結婚 vs 繼續事業衝刺**、生育抉擇（是否、何時）、**前任在同學會/工作場合重新出現**、家人介入感情。'
-    : lastAge < 50 ? '此階段是「中年期」，可能出現:升遷天花板、中年轉職、父母長照、子女教育、房貸壓力、**婚姻倦怠或第三者誘惑**、**多年沒見的人意外重逢（前任、初戀、舊同學、前同事）並重新影響你的選擇**、移民考量。'
-    : lastAge < 60 ? '此階段是「中後段」，可能出現:倦怠、退休準備、健康警訊、子女離家後的夫妻關係重新審視、**喪偶/離婚/重新單身**、**老朋友或老情人重新聯絡**、第二人生規劃。'
-    : '此階段是「退休前後」，可能出現：與配偶/家人關係的整理、長期單身的孤獨、**過去的人帶著歉意或祝福回來**。年齡到 65-70 請務必設 is_terminal: true。'
+    : lastAge < 35 ? '此階段是「青年期」，可能出現:跳槽、考公職、第一桶金的累積或揮霍、**結婚 vs 繼續事業衝刺**、生育抉擇（是否、何時）、**創業可能成功也可能燒光積蓄回頭打工**、買房的拉鋸（買得起 vs 揹一輩子貸款 vs 直接放棄）、家人介入感情。**不是每個人到 35 都已經穩定**——很多人還在租屋、跳槽、迷惘、被原生家庭拉扯。'
+    : lastAge < 50 ? '此階段是「中年期」，**不一定每個人都會升遷或變成高階主管**——很多人到中年才意識到自己卡在某個位子上不上不下，或是被年輕世代追上。可能出現:升遷天花板、被年輕同事超越、被裁員後的中年失業、轉職一事無成、創業失敗回頭打工、副業沒做起來、長照爸媽變成主要日常、子女教育的金錢與情感拉鋸、房貸壓力把日子壓得很扁、**婚姻倦怠/外遇試探**、健康開始亮紅燈、**多年沒見的人意外重逢但結果常常令人尷尬而非戲劇性**、移民考量、想脫離但脫離不了的工作。中年的核心常常是「夢想跟現實的距離終於量出來了」。'
+    : lastAge < 60 ? '此階段是「中後段」，**不要預設此時人已經事業有成、子女出息、財務無虞**。常見情境：倦怠到上班只剩工時表、退休金算來算去都不夠、健康警訊（高血壓/腰椎/腫瘤檢查）、子女離家後夫妻關係重新審視（有時候和好，有時候才發現沒話說）、**喪偶/離婚/重新單身**、年邁父母過世後的空缺、**老朋友或老情人重新聯絡——重逢可能溫暖，也可能尷尬甚至傷害**、第二人生規劃（很多人想了沒做、做了沒成）。'
+    : '此階段是「退休前後」，可能出現：與配偶/家人關係的整理、長期單身的孤獨、退休金與長照成本的現實、身體一下垮掉的事件、**過去的人帶著歉意或祝福回來，但更多時候是帶著病或債務回來**。年齡到 65-70 請務必設 is_terminal: true。'
 
   const archeBlock = archetype ? `\n${archetypeBlock(archetype)}\n` : ''
 
