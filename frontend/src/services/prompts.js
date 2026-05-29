@@ -124,9 +124,69 @@ const DRAMA_POOL = {
   ]
 }
 
-function pickDramaHint(lastAge) {
-  // ~30% of nodes get a drama curveball
-  if (Math.random() > 0.32) return null
+// ───────────────────────────────────────────────────────────────────────────
+// Valence tracker → self-balancing luck.
+//
+// Without this, every node rolls drama at 32% and opportunity at 28%
+// independently — which means runs of pure bad luck happen often (3 nodes
+// of drama in a row is ~3% but a 30-node life will see one ~35% of the time)
+// and feel unfair. Real life isn't perfectly self-correcting either, but a
+// game that asks the player to invest 20+ choices needs to feel like the
+// dice aren't loaded against them.
+//
+// Approach: tag each past node by valence (good / bad / neutral) using
+// keyword matching, sum the last `windowSize` nodes, and use that streak to
+// shift drama / opportunity probabilities for THIS turn.
+//
+// After three bad nodes the next roll heavily favours opportunity and damps
+// drama. After three good nodes the roll mildly reverts (life isn't all
+// upward either). Neutral nodes don't move the needle.
+const POSITIVE_RE = /獎學金|錄取|考上|升遷|升任|加薪|挖角|獎項|得獎|入圍|表揚|貴人|和好|和解|懷孕|生下|結婚|求婚|告白成功|還清|存到|買房|首購|爆紅|被看見|順利|健康好轉|康復|走出|重新|機會|創業.*(成功|起飛)|找到.*(自己|方向)|出版|發表|被報導|被肯定|被支持|被選/
+
+const NEGATIVE_RE = /失業|被裁|資遣|倒閉|破產|周轉不靈|詐騙|被騙|分手|劈腿|外遇|背叛|離婚|喪偶|去世|過世|罹癌|癌症|化療|住院|手術|中風|失智|霸凌|猝死|燒燙|車禍|意外|地震.*(傷|倒)|被.*(性騷|騷擾|施壓|肉搜)|憂鬱症|崩潰|出事|被告|官司|敗訴|負債|套牢|爆雷|被催|被甩|被開除|落榜|重考|無薪|裁員|流產|不孕|遺產.*糾紛|家.*(吵|決裂|翻臉)/
+
+function classifyValence(situation, choice) {
+  const text = (situation || '') + ' ' + (choice || '')
+  const pos = POSITIVE_RE.test(text)
+  const neg = NEGATIVE_RE.test(text)
+  // Mixed nodes (both fire) net to neutral — those are usually the "kind
+  // teacher noticed me the year dad got sick" beats and shouldn't push the
+  // streak counter either way.
+  if (pos && neg) return 0
+  if (pos) return +1
+  if (neg) return -1
+  return 0
+}
+
+function recentValence(history, windowSize = 4) {
+  if (!history || history.length === 0) return 0
+  const recent = history.slice(-windowSize)
+  let sum = 0
+  for (const h of recent) sum += classifyValence(h.situation, h.choice)
+  return sum
+}
+
+// Returns rates + an optional UI/LLM hint string explaining the adjustment.
+// Streak ≤ -3 : "rough patch, give a real break"
+// Streak  = -2: "lean toward better news"
+// Streak  = -1: "small nudge upward"
+// Streak  =  0: defaults
+// Streak  = +1: defaults (don't punish a single good beat)
+// Streak  = +2: "slight reversion"
+// Streak ≥ +3: "things can turn"
+function balancedRates(streak) {
+  if (streak <= -3) return { dramaP: 0.10, oppP: 0.62, tag: 'bad-streak-strong' }
+  if (streak === -2) return { dramaP: 0.18, oppP: 0.50, tag: 'bad-streak' }
+  if (streak === -1) return { dramaP: 0.26, oppP: 0.38, tag: 'mild-bad' }
+  if (streak === 0)  return { dramaP: 0.32, oppP: 0.28, tag: 'neutral' }
+  if (streak === 1)  return { dramaP: 0.32, oppP: 0.26, tag: 'neutral' }
+  if (streak === 2)  return { dramaP: 0.36, oppP: 0.22, tag: 'good-streak' }
+  return { dramaP: 0.42, oppP: 0.18, tag: 'good-streak-strong' }
+}
+// ───────────────────────────────────────────────────────────────────────────
+
+function pickDramaHint(lastAge, p = 0.32) {
+  if (Math.random() > p) return null
   let pool
   if (lastAge < 18)      pool = DRAMA_POOL.teen
   else if (lastAge < 30) pool = DRAMA_POOL.young
@@ -205,8 +265,8 @@ const OPPORTUNITY_POOL = {
   ]
 }
 
-function pickOpportunityHint(lastAge) {
-  if (Math.random() > 0.28) return null
+function pickOpportunityHint(lastAge, p = 0.28) {
+  if (Math.random() > p) return null
   let pool
   if (lastAge < 18)      pool = OPPORTUNITY_POOL.teen
   else if (lastAge < 30) pool = OPPORTUNITY_POOL.young
@@ -901,11 +961,26 @@ ${lastState.notable ? `- 備註：${lastState.notable}` : ''}\n`
 
   const archeBlock = archetype ? `\n${archetypeBlock(archetype)}\n` : ''
 
+  // Self-balancing luck. Read the recent valence streak and shift drama /
+  // opportunity probabilities accordingly. Without this, runs of pure bad
+  // luck happen often enough (~35% per 30-node life) to feel unfair. With
+  // it, three bad nodes in a row push the next roll firmly toward
+  // opportunity, while a perfect streak gets a mild cooling.
+  const streak = recentValence(history, 4)
+  const rates = balancedRates(streak)
+  const luckBlock = rates.tag === 'bad-streak-strong'
+    ? `\n【⚖ 命運平衡（最近三、四個節點都太沉重，給角色一個真實的喘息）】\n這個節點請**主動讓一件好事降臨**——不是俗濫的天降好運，而是合理的人物/機運/小光：一個對的人出現、一個之前的努力被看見、一個之前的小投資/興趣帶來回報、一段久違的家人和解、一個有人願意伸手幫忙的瞬間。drama 可以仍然存在於背景裡，但這個節點的核心戲不要再是壓人。\n`
+    : rates.tag === 'bad-streak'
+      ? `\n【⚖ 命運平衡（最近偏向苦難，這個節點請帶向上的可能）】\n至少其中一個選項要明確指向一個**真實的好轉路徑**——不是兩個都是「比較不糟」的版本。\n`
+      : rates.tag === 'good-streak-strong'
+        ? `\n【⚖ 命運平衡（最近一切順遂，可以加入一個合理的代價或試煉）】\n人生不會一路順風。這個節點可以引入一個小小的逆風（不必是大災難，可能是一段關係的疏遠、一個被忽略的代價、一個讓人不舒服的選擇），讓故事繼續有重量。\n`
+        : ''
+
   // Roll a drama suggestion for this node. Sometimes nothing — we still want
   // ordinary life beats. When something rolls, we hand it to the LLM as a
   // hint, not a script: it can soften the framing, weave it through the cast,
   // or pick a related angle.
-  const dramaHint = pickDramaHint(lastAge)
+  const dramaHint = pickDramaHint(lastAge, rates.dramaP)
   const dramaBlock = dramaHint
     ? `\n【⚠ 戲劇轉折建議（這個節點請強烈考慮把以下事件融入情境）】\n${dramaHint}\n如果這事件跟角色背景與當前狀態不合理，可以調整細節，但不要捨棄這個轉折的精神。\n`
     : ''
@@ -913,7 +988,7 @@ ${lastState.notable ? `- 備註：${lastState.notable}` : ''}\n`
   // Roll an opportunity. This counterweights drama so bad-start lives still
   // have real upward inflection points. drama and opportunity can both fire
   // on the same node — that's often where the best stories live.
-  const oppHint = pickOpportunityHint(lastAge)
+  const oppHint = pickOpportunityHint(lastAge, rates.oppP)
   const oppBlock = oppHint
     ? `\n【★ 轉機建議（這個節點請把以下機會以合理方式融入情境）】\n${oppHint}\n機會不一定要被把握——其中一個選項可以是「拒絕這個機會」（為了家人、害怕、不相信自己）。但機會本身必須真實出現，不能假裝沒看到。\n`
     : ''
@@ -956,7 +1031,7 @@ ${lastState.notable ? `- 備註：${lastState.notable}` : ''}\n`
 
   const system = `你是台灣版人生模擬的關卡設計師。
 根據角色背景、選擇歷史、台灣當前統計、人生原型、以及此時的時代背景，生成下一個人生決策節點。
-${archeBlock}${dramaBlock}${oppBlock}${macroBlock}${curveballBlock}${earlyDeathBlock}${overusedBlock}${meetNewBlock}
+${archeBlock}${luckBlock}${dramaBlock}${oppBlock}${macroBlock}${curveballBlock}${earlyDeathBlock}${overusedBlock}${meetNewBlock}
 【台灣現況統計（★ 標記角色所在地）】
 ${statsBlock(stats, character)}
 
